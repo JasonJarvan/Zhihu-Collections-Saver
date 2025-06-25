@@ -1,0 +1,14 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+      {
+          "name": "调试 main.py",
+          "type": "python",
+          "request": "launch",
+          "program": "${workspaceFolder}/main.py",
+          "console": "integratedTerminal",
+          "justMyCode": false
+          // 如果 main.py 需要命令行参数，可在这里加 "args": ["参数1", "参数2"]
+      }
+  ]
+}
