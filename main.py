@@ -128,14 +128,37 @@ def setup_debug_logging():
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     debug_log_file = os.path.join(logs_dir, f"debug_{timestamp}.log")
     
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format='%(asctime)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler(debug_log_file, encoding='utf-8'),
-            logging.StreamHandler()
-        ]
-    )
+    # 清除所有已存在的处理器
+    root_logger = logging.getLogger()
+    for handler in root_logger.handlers[:]:
+        root_logger.removeHandler(handler)
+    
+    # 创建文件处理器，立即写入
+    file_handler = logging.FileHandler(debug_log_file, encoding='utf-8', mode='w')
+    file_handler.setLevel(logging.DEBUG)
+    
+    # 创建控制台处理器
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    
+    # 设置格式
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    file_handler.setFormatter(formatter)
+    console_handler.setFormatter(formatter)
+    
+    # 配置根日志记录器
+    root_logger.setLevel(logging.DEBUG)
+    root_logger.addHandler(file_handler)
+    root_logger.addHandler(console_handler)
+    
+    # 测试日志写入
+    logging.info(f"日志系统初始化完成，日志文件: {debug_log_file}")
+    
+    # 强制刷新
+    for handler in root_logger.handlers:
+        if hasattr(handler, 'flush'):
+            handler.flush()
+    
     return debug_log_file
 
 # 重新配置日志路径
@@ -148,19 +171,28 @@ def reconfigure_logging():
     debug_log_file = os.path.join(logs_dir, f"debug_{timestamp}.log")
     
     # 清除已有的handler
-    for handler in logging.root.handlers[:]:
-        logging.root.removeHandler(handler)
+    root_logger = logging.getLogger()
+    for handler in root_logger.handlers[:]:
+        handler.flush()  # 确保刷新
+        root_logger.removeHandler(handler)
     
-    # 重新配置
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format='%(asctime)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler(debug_log_file, encoding='utf-8'),
-            logging.StreamHandler()
-        ],
-        force=True
-    )
+    # 创建新的处理器
+    file_handler = logging.FileHandler(debug_log_file, encoding='utf-8')
+    file_handler.setLevel(logging.DEBUG)
+    
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    
+    # 设置格式
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    file_handler.setFormatter(formatter)
+    console_handler.setFormatter(formatter)
+    
+    # 重新添加处理器
+    root_logger.addHandler(file_handler)
+    root_logger.addHandler(console_handler)
+    root_logger.setLevel(logging.DEBUG)
+    
     return debug_log_file
 
 # 获取输出路径的函数
@@ -191,6 +223,115 @@ def get_logs_path():
     else:
         # 使用默认路径
         return os.path.join(os.path.dirname(__file__), 'downloads', 'logs')
+
+def get_debug_path():
+    """
+    获取调试文件路径
+    """
+    global base_output_path
+    
+    if base_output_path:
+        # 使用自定义输出路径
+        return os.path.join(str(base_output_path), 'debug')
+    else:
+        # 使用默认路径
+        return os.path.join(os.path.dirname(__file__), 'downloads', 'debug')
+
+def smart_content_detection(soup, url):
+    """
+    智能内容检测 - 当标准选择器失败时的备用方案
+    """
+    logging.debug(f"开始智能内容检测: {url}")
+    
+    # 策略1: 查找包含大量文本的div元素
+    all_divs = soup.find_all('div')
+    text_length_threshold = 200  # 最少文本长度
+    
+    candidates = []
+    for div in all_divs:
+        text_content = div.get_text(strip=True)
+        if len(text_content) > text_length_threshold:
+            # 计算直接子节点中的文本密度
+            direct_text_length = len(''.join(div.find_all(text=True, recursive=False)))
+            total_length = len(text_content)
+            
+            # 过滤掉主要是链接或导航的容器
+            link_count = len(div.find_all('a'))
+            text_to_link_ratio = total_length / max(link_count, 1)
+            
+            candidates.append({
+                'element': div,
+                'text_length': total_length,
+                'text_to_link_ratio': text_to_link_ratio,
+                'classes': div.get('class', [])
+            })
+    
+    # 按文本长度排序，选择最长的
+    candidates.sort(key=lambda x: x['text_length'], reverse=True)
+    
+    if candidates:
+        best_candidate = candidates[0]
+        logging.debug(f"智能检测找到候选内容，长度: {best_candidate['text_length']}, classes: {best_candidate['classes']}")
+        
+        # 如果最佳候选者文本长度足够长，返回它
+        if best_candidate['text_length'] > 500:
+            return best_candidate['element']
+    
+    # 策略2: 查找文章相关的容器
+    article_containers = soup.find_all(['article', 'main'])
+    for container in article_containers:
+        text_content = container.get_text(strip=True)
+        if len(text_content) > text_length_threshold:
+            logging.debug(f"找到文章容器: {container.name}")
+            return container
+    
+    # 策略3: 查找包含多个段落的容器
+    for div in all_divs:
+        paragraphs = div.find_all('p')
+        if len(paragraphs) >= 3:  # 至少3个段落
+            total_p_text = sum(len(p.get_text(strip=True)) for p in paragraphs)
+            if total_p_text > text_length_threshold:
+                logging.debug(f"找到多段落容器，段落数: {len(paragraphs)}")
+                return div
+    
+    logging.debug("智能内容检测未找到合适的内容")
+    return None
+
+def analyze_page_error(soup, response, url):
+    """
+    分析页面错误类型，区分404、登录要求、解析失败等
+    """
+    page_text = response.text.lower()
+    
+    # 检查404错误
+    if '404' in page_text or 'not found' in page_text or '页面不存在' in page_text:
+        return "该文章链接被404, 无法直接访问"
+    
+    # 检查登录要求
+    if '登录' in response.text or 'login' in page_text or '请先登录' in response.text:
+        return "该文章需要登录访问，请检查cookies配置"
+    
+    # 检查访问权限
+    if '403' in page_text or 'forbidden' in page_text or '访问被拒绝' in response.text:
+        return "该文章访问被拒绝，可能需要特殊权限"
+    
+    # 检查内容是否被删除
+    if '已删除' in response.text or '内容不存在' in response.text or 'deleted' in page_text:
+        return "该文章内容已被删除或不存在"
+    
+    # 检查是否有重定向
+    if response.url != url:
+        return f"页面被重定向到: {response.url}, 可能是登录页面或错误页面"
+    
+    # 检查页面是否包含正常的知乎页面结构
+    zhihu_indicators = ['知乎', 'zhihu', 'www.zhihu.com']
+    has_zhihu_structure = any(indicator in page_text for indicator in zhihu_indicators)
+    
+    if not has_zhihu_structure:
+        return "页面结构异常，可能不是正常的知乎页面"
+    
+    # 如果页面看起来正常但找不到内容，可能是页面结构变化
+    return "页面结构可能发生变化，无法解析文章内容"
 
 debug_log_file = setup_debug_logging()
 
@@ -359,19 +500,27 @@ def get_article_nums_of_collection(collection_id):
         html.raise_for_status()
 
         # 页面总数
-        return html.json()['paging'].get('totals')
-    except:
-        return None
+        result = html.json()['paging'].get('totals')
+        logging.info(f"收藏夹 {collection_id} 包含 {result} 个项目")
+        return result
+    except Exception as e:
+        logging.error(f"获取收藏夹 {collection_id} 总数失败: {str(e)}")
+        return 0
 
 
 # 解析出每个回答的具体链接
 def get_article_urls_in_collection(collection_id):
-    collection_id =collection_id.replace('\n','')
+    collection_id = collection_id.replace('\n','')
+    logging.info(f"开始获取收藏夹 {collection_id} 的文章列表")
 
     offset = 0
     limit = 20
 
     article_nums = get_article_nums_of_collection(collection_id)
+    
+    if article_nums is None or article_nums == 0:
+        logging.warning(f"收藏夹 {collection_id} 没有文章或获取失败")
+        return [], []
 
     url_list = []
     title_list = []
@@ -379,47 +528,119 @@ def get_article_urls_in_collection(collection_id):
         collection_url = "https://www.zhihu.com/api/v4/collections/{}/items?offset={}&limit={}".format(collection_id,
                                                                                                        offset, limit)
         try:
+            logging.info(f"请求收藏夹API: offset={offset}, limit={limit}")
             html = requests.get(collection_url, headers=headers, cookies=cookies)
+            html.raise_for_status()
             content = html.json()
-        except:
-            return None
+            logging.info(f"成功获取 {len(content.get('data', []))} 个项目")
+        except Exception as e:
+            logging.error(f"请求收藏夹API失败: {str(e)}")
+            # 返回已获取的内容而不是None
+            return url_list, title_list
 
-        for el in content['data']:
-            url_list.append(el['content']['url'])
+        for el in content.get('data', []):
             try:
+                url_list.append(el['content']['url'])
                 if el['content']['type'] == 'answer':
                     title_list.append(el['content']['question']['title'])
                 else:
                     title_list.append(el['content']['title'])
-            except:
+                logging.debug(f"添加文章: {el['content'].get('title', '未知标题')}")
+            except Exception as e:
+                logging.warning(f"解析文章项目失败: {str(e)}")
                 print('********')
                 print('TBD 非回答, 非专栏, 想法类收藏暂时无法处理')
                 for k, v in el['content'].items():
                     if k in ['type', 'url']:
                         print(k, v)
                 print('********')
-                url_list.pop()
+                # 如果已经添加了URL，需要移除对应的URL
+                if len(url_list) > len(title_list):
+                    url_list.pop()
 
         offset += limit
 
+    logging.info(f"收藏夹 {collection_id} 总共获取到 {len(url_list)} 个有效文章")
     return url_list, title_list
 
 
 # 获得单条答案的数据
 def get_single_answer_content(answer_url):
-    # all_content = {}
-    # question_id, answer_id = re.findall('https://www.zhihu.com/question/(\d+)/answer/(\d+)', answer_url)[0]
-
-    html_content = requests.get(answer_url, headers=headers, cookies=cookies)
-    soup = BeautifulSoup(html_content.text, "lxml")
+    logging.debug(f"开始获取回答内容: {answer_url}")
+    flush_logs()
+    
     try:
-        answer_content = soup.find('div', class_="AnswerCard").find("div", class_="RichContent-inner")
-    except:
-        print(answer_url, 'failed')
+        # 发送请求
+        html_content = requests.get(answer_url, headers=headers, cookies=cookies)
+        html_content.raise_for_status()
+        logging.debug(f"HTTP请求成功，状态码: {html_content.status_code}")
+        
+        soup = BeautifulSoup(html_content.text, "lxml")
+        
+        # 尝试多种可能的选择器
+        answer_content = None
+        selectors = [
+            ('div', {'class': "AnswerCard"}),
+            ('div', {'class': "QuestionAnswer-content"}),
+            ('div', {'class': "RichContent"}),
+            ('div', {'class': "ContentItem-expandButton"}),
+        ]
+        
+        for tag, attrs in selectors:
+            elements = soup.find_all(tag, attrs)
+            if elements:
+                logging.debug(f"找到{len(elements)}个 {tag} {attrs} 元素")
+                for element in elements:
+                    inner = element.find("div", class_="RichContent-inner")
+                    if inner:
+                        answer_content = inner
+                        logging.debug("成功找到RichContent-inner元素")
+                        break
+                if answer_content:
+                    break
+        
+        # 如果还没找到，尝试直接查找RichContent-inner
+        if not answer_content:
+            answer_content = soup.find("div", class_="RichContent-inner")
+            if answer_content:
+                logging.debug("直接找到RichContent-inner元素")
+        
+        # 如果仍未找到，尝试其他可能的内容容器
+        if not answer_content:
+            fallback_selectors = [
+                "div.RichText",
+                "div.Post-RichText", 
+                "div.ContentItem-content",
+                ".QuestionAnswer .RichContent",
+            ]
+            
+            for selector in fallback_selectors:
+                answer_content = soup.select_one(selector)
+                if answer_content:
+                    logging.debug(f"使用备用选择器找到内容: {selector}")
+                    break
+        
+        if not answer_content:
+            logging.error(f"未找到回答内容容器: {answer_url}")
+            # 保存页面HTML以供调试
+            debug_dir = get_debug_path()
+            os.makedirs(debug_dir, exist_ok=True)
+            debug_file = os.path.join(debug_dir, f"debug_answer_{answer_url.split('/')[-1]}.html")
+            with open(debug_file, 'w', encoding='utf-8') as f:
+                f.write(html_content.text)
+            logging.debug(f"页面HTML已保存到: {debug_file}")
+            flush_logs()
+            return -1
+        
+        # 去除不必要的style标签
+        for el in answer_content.find_all('style'):
+            el.extract()
+            
+    except Exception as e:
+        logging.error(f"获取回答内容时发生错误: {str(e)}")
+        logging.error(f"URL: {answer_url}")
+        flush_logs()
         return -1
-    # 去除不必要的style标签
-    for el in answer_content.find_all('style'):
-        el.extract()
 
     for el in answer_content.select('img[src*="data:image/svg+xml"]'):
         el.extract()
@@ -446,32 +667,104 @@ def get_single_answer_content(answer_url):
 
 # 获取单条专栏文章的内容
 def get_single_post_content(paper_url):
-    html_content = requests.get(paper_url, headers=headers, cookies=cookies)
-    soup = BeautifulSoup(html_content.text, "lxml")
-    post_content = soup.find("div", class_="Post-RichText")
-    # 去除不必要的style标签
-    if post_content:
-        for el in post_content.find_all('style'):
-            el.extract()
-
-        for el in post_content.select('img[src*="data:image/svg+xml"]'):
-            el.extract()
+    logging.debug(f"开始获取专栏文章内容: {paper_url}")
+    flush_logs()
+    
+    try:
+        # 发送请求
+        html_content = requests.get(paper_url, headers=headers, cookies=cookies)
+        html_content.raise_for_status()
+        logging.debug(f"HTTP请求成功，状态码: {html_content.status_code}")
         
-        for el in post_content.find_all('a'): # 处理专栏文章中的卡片链接
-            aclass = el.get('class')
-            if isinstance(aclass, list):
-                if aclass[0] == 'LinkCard':
-                    linkcard_name = el.get('data-text')
-                    el.string = linkcard_name if linkcard_name is not None else el.get('href')
-            else:
-                pass
-            try:
-                if el.get('href').startswith('mailto'): # 特殊bug, 正文的aaa@bbb.ccc会被识别为邮箱, 嵌入<a href='mailto:xxx'>中, markdown转换时会报错
-                    el.name = 'p'
-            except:
-                print(paper_url, el)
-    else:
-        post_content = "该文章链接被404, 无法直接访问"
+        soup = BeautifulSoup(html_content.text, "lxml")
+        
+        # 尝试多种可能的选择器
+        post_content = None
+        selectors = [
+            ('div', {'class': "Post-RichText"}),
+            ('div', {'class': "RichContent"}),
+            ('div', {'class': "RichContent-inner"}),
+            ('div', {'class': "Post-content"}),
+            ('div', {'class': "Post-RichTextContainer"}),
+            ('div', {'class': "ztext"}),
+            ('div', {'class': "Post-Main"}),
+            ('div', {'class': "Article-RichText"}),
+        ]
+        
+        for tag, attrs in selectors:
+            post_content = soup.find(tag, attrs)
+            if post_content:
+                logging.debug(f"找到专栏内容: {tag} {attrs}")
+                break
+        
+        # 如果还没找到，尝试CSS选择器
+        if not post_content:
+            fallback_selectors = [
+                "div.RichText",
+                "div.Post-content", 
+                "div.ContentItem-content",
+                ".Post .RichContent",
+                ".Post-RichTextContainer",
+                ".ztext",
+                ".Post-Main .RichContent",
+                "[data-zop-editor]",
+                ".Article-RichText",
+            ]
+            
+            for selector in fallback_selectors:
+                post_content = soup.select_one(selector)
+                if post_content:
+                    logging.debug(f"使用备用选择器找到内容: {selector}")
+                    break
+        
+        # 如果仍然没找到，尝试智能内容检测
+        if not post_content:
+            post_content = smart_content_detection(soup, paper_url)
+            if post_content:
+                logging.debug("使用智能内容检测找到内容")
+        
+        if not post_content:
+            # 检查是否是真正的404或其他错误
+            error_message = analyze_page_error(soup, html_content, paper_url)
+            
+            logging.error(f"未找到专栏内容容器: {paper_url} - {error_message}")
+            # 保存页面HTML以供调试
+            debug_dir = get_debug_path()
+            os.makedirs(debug_dir, exist_ok=True)
+            debug_file = os.path.join(debug_dir, f"debug_post_{paper_url.split('/')[-1]}.html")
+            with open(debug_file, 'w', encoding='utf-8') as f:
+                f.write(html_content.text)
+            logging.debug(f"页面HTML已保存到: {debug_file}")
+            flush_logs()
+            post_content = error_message
+        
+        if post_content and hasattr(post_content, 'find_all'):
+            # 去除不必要的style标签
+            for el in post_content.find_all('style'):
+                el.extract()
+
+            for el in post_content.select('img[src*="data:image/svg+xml"]'):
+                el.extract()
+            
+            for el in post_content.find_all('a'): # 处理专栏文章中的卡片链接
+                aclass = el.get('class')
+                if isinstance(aclass, list):
+                    if aclass[0] == 'LinkCard':
+                        linkcard_name = el.get('data-text')
+                        el.string = linkcard_name if linkcard_name is not None else el.get('href')
+                else:
+                    pass
+                try:
+                    if el.get('href').startswith('mailto'): # 特殊bug, 正文的aaa@bbb.ccc会被识别为邮箱, 嵌入<a href='mailto:xxx'>中, markdown转换时会报错
+                        el.name = 'p'
+                except:
+                    logging.warning(f"处理链接时出现问题: {paper_url}, {el}")
+        
+    except Exception as e:
+        logging.error(f"获取专栏文章内容时发生错误: {str(e)}")
+        logging.error(f"URL: {paper_url}")
+        flush_logs()
+        post_content = "该文章链接获取失败"
 
     # 添加html外层标签
     post_content = html_template(post_content)
@@ -540,6 +833,8 @@ def get_unique_filename(base_dir, title, url):
     return os.path.join(base_dir, unique_filename + ".md")
 
 
+
+
 def save_processing_log():
     """
     保存处理日志到logs目录
@@ -559,13 +854,57 @@ def save_processing_log():
 
 
 
+def flush_logs():
+    """强制刷新所有日志处理器"""
+    import sys
+    root_logger = logging.getLogger()
+    
+    for handler in root_logger.handlers:
+        try:
+            if hasattr(handler, 'flush'):
+                handler.flush()
+            # 如果是文件处理器，强制同步
+            if hasattr(handler, 'stream') and hasattr(handler.stream, 'flush'):
+                handler.stream.flush()
+                # 强制操作系统刷新
+                if hasattr(handler.stream, 'fileno'):
+                    try:
+                        os.fsync(handler.stream.fileno())
+                    except:
+                        pass
+        except:
+            pass
+    
+    # 强制刷新标准输出
+    sys.stdout.flush()
+    sys.stderr.flush()
+
 def process_single_collection(collection_name, collection_url):
     """处理单个收藏夹"""
     global current_collection_name, processing_log
     current_collection_name = collection_name
     
-    collection_id = collection_url.split('?')[0].split('/')[-1]
-    urls, titles = get_article_urls_in_collection(collection_id)
+    logging.info(f"开始处理收藏夹: {collection_name}")
+    logging.info(f"收藏夹URL: {collection_url}")
+    flush_logs()
+    
+    try:
+        collection_id = collection_url.split('?')[0].split('/')[-1]
+        logging.info(f"解析得到收藏夹ID: {collection_id}")
+        flush_logs()
+        
+        urls, titles = get_article_urls_in_collection(collection_id)
+        
+        if not urls:
+            logging.warning(f"收藏夹 '{collection_name}' 没有获取到任何文章")
+            flush_logs()
+            return
+            
+    except Exception as e:
+        logging.error(f"处理收藏夹 '{collection_name}' 时发生错误: {str(e)}")
+        logging.error(f"错误详情: {traceback.format_exc()}")
+        flush_logs()
+        return
     
     # 初始化此收藏夹的日志记录
     collection_log = {
@@ -574,12 +913,13 @@ def process_single_collection(collection_name, collection_url):
         "list": []
     }
     
-    if not urls:
-        print(f"收藏夹 '{collection_name}' 获取失败或为空")
+    # 验证数据一致性
+    if len(urls) != len(titles):
+        error_msg = f'地址标题列表长度不一致: urls={len(urls)}, titles={len(titles)}'
+        logging.error(error_msg)
+        flush_logs()
         processing_log.append(collection_log)
         return
-    
-    assert len(urls) == len(titles), '地址标题列表长度不一致'
     
     print(f"收藏夹 '{collection_name}' 共获取 {len(urls)} 篇可导出回答或专栏")
     
@@ -609,6 +949,9 @@ def process_single_collection(collection_name, collection_url):
             continue
         
         try:
+            logging.info(f"开始下载文章: {title}")
+            flush_logs()
+            
             if url.find('zhuanlan') != -1:
                 content = get_single_post_content(url)
             else:
@@ -617,7 +960,8 @@ def process_single_collection(collection_name, collection_url):
             if content == -1:
                 article_log["status"] = f"文章下载失败, 原因:获取内容失败"
                 collection_log["list"].append(article_log)
-                print(url, 'get content failed.')
+                logging.warning(f"获取内容失败: {url}")
+                flush_logs()
                 continue
             
             md = markdownify(content, heading_style="ATX")
@@ -628,14 +972,19 @@ def process_single_collection(collection_name, collection_url):
             
             article_log["status"] = "文章不存在,正常下载"
             collection_log["list"].append(article_log)
+            logging.info(f"文章下载成功: {title}")
+            flush_logs()
+            
+            # 添加延时
             time.sleep(random.randint(1, 5))
             
         except Exception as e:
             article_log["status"] = f"文章下载失败, 原因:{str(e)}"
             collection_log["list"].append(article_log)
-            print(content)
-            print(e)
-            print(url, 'error')
+            logging.error(f"下载文章时发生错误: {title}")
+            logging.error(f"错误详情: {str(e)}")
+            logging.error(f"URL: {url}")
+            flush_logs()
     
     # 将收藏夹日志添加到全局日志
     processing_log.append(collection_log)
@@ -644,7 +993,6 @@ def process_single_collection(collection_name, collection_url):
 
 if __name__ == '__main__':
     # 加载配置
-    global config, base_output_path
     config = load_config()
     
     # 解析输出路径
@@ -660,10 +1008,21 @@ if __name__ == '__main__':
     else:
         print("使用默认输出路径: downloads/")
     
+    # 检查是否启用openCollection模式
+    open_collection_mode = config.get('openCollection', False)
+    
+    if open_collection_mode:
+        print("检测到openCollection模式已启用")
+        print("请先运行 python fetch_collections.py 获取收藏夹列表")
+        print("然后将config.json中的openCollection设为false，重新运行此程序")
+        sys.exit(1)
+    
+    # 常规模式：处理收藏夹下载
     zhihu_collections = config.get('zhihuUrls', [])
     
     if not zhihu_collections:
         print("没有找到要处理的收藏夹配置")
+        print("提示：请运行 python fetch_collections.py 自动获取收藏夹列表")
         sys.exit(1)
     
     print(f"共找到 {len(zhihu_collections)} 个收藏夹待处理")

@@ -11,7 +11,8 @@
       }
     ],
     "outputPath": "D:\\Documents\\ShengDocument\\人工智能训练师\\所有考题资料(1)\\所有考题资料\\考题和评分表",
-    "os": "windows"
+    "os": "windows",
+    "openCollection": false
   },
   "linux_example": {
     "zhihuUrls": [
@@ -25,7 +26,8 @@
       }
     ],
     "outputPath": "/usr/local/lib/node_modules/",
-    "os": "linux"
+    "os": "linux",
+    "openCollection": false
   },
   "macos_example": {
     "zhihuUrls": [
@@ -39,7 +41,8 @@
       }
     ],
     "outputPath": "~/Documents/ZhihuExports",
-    "os": "macos"
+    "os": "macos",
+    "openCollection": false
   },
   "freebsd_example": {
     "zhihuUrls": [
@@ -49,7 +52,8 @@
       }
     ],
     "outputPath": "/usr/local/share/zhihu-exports",
-    "os": "freebsd"
+    "os": "freebsd",
+    "openCollection": false
   },
   "solaris_example": {
     "zhihuUrls": [
@@ -59,7 +63,8 @@
       }
     ],
     "outputPath": "/export/home/user/zhihu-data",
-    "os": "solaris"
+    "os": "solaris",
+    "openCollection": false
   },
   "cygwin_example": {
     "zhihuUrls": [
@@ -69,7 +74,8 @@
       }
     ],
     "outputPath": "/cygdrive/d/Documents/ZhihuExports",
-    "os": "cygwin"
+    "os": "cygwin",
+    "openCollection": false
   },
   "auto_detect_example": {
     "zhihuUrls": [
@@ -83,7 +89,8 @@
       }
     ],
     "outputPath": "~/Downloads/ZhihuCollections",
-    "os": ""
+    "os": "",
+    "openCollection": false
   },
   "default_example": {
     "zhihuUrls": [
@@ -97,6 +104,13 @@
       }
     ],
     "outputPath": "",
-    "os": ""
+    "os": "",
+    "openCollection": false
+  },
+  "open_collection_example": {
+    "zhihuUrls": [],
+    "outputPath": "",
+    "os": "",
+    "openCollection": true
   }
 }

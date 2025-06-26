@@ -13,3 +13,4 @@ dist/
 *.spec
 cookies.json
 /downloads
+.vscode/*

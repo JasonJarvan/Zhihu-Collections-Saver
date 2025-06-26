@@ -3,7 +3,7 @@
   "configurations": [
       {
           "name": "调试 main.py",
-          "type": "python",
+          "type": "debugpy",
           "request": "launch",
           "program": "${workspaceFolder}/main.py",
           "console": "integratedTerminal",

@@ -4,7 +4,11 @@
       "Bash(python:*)",
       "Bash(pip3 install:*)",
       "Bash(apt:*)",
-      "Bash(apt install:*)"
+      "Bash(apt install:*)",
+      "Bash(/usr/bin/python3 -m pip --version)",
+      "Bash(/usr/bin/python3:*)",
+      "Bash(mkdir:*)",
+      "Bash(mv:*)"
     ],
     "deny": []
   }
