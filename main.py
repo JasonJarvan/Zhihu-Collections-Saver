@@ -338,10 +338,32 @@ debug_log_file = setup_debug_logging()
 cookies = load_cookies()
 
 headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/61.0.3163.100 Safari/537.36",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
     "Connection": "keep-alive",
-    "Accept": "text/html,application/json,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "zh-CN,zh;q=0.8"
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6,zh-TW;q=0.5",
+    "Accept-Encoding": "gzip, deflate, br, zstd",
+    "Referer": "https://www.zhihu.com/",
+    "sec-ch-ua": "\"Microsoft Edge\";v=\"147\", \"Not.A/Brand\";v=\"8\", \"Chromium\";v=\"147\"",
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": "\"Windows\"",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "same-site",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1"
+}
+
+# API 请求的 headers（用于获取回答内容）
+api_headers = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+    "Accept": "*/*",
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    "Referer": "https://www.zhihu.com/",
+    "x-requested-with": "fetch",
+    "sec-ch-ua": "\"Microsoft Edge\";v=\"147\", \"Not.A/Brand\";v=\"8\", \"Chromium\";v=\"147\"",
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": "\"Windows\"",
 }
 
 class ObsidianStyleConverter(MarkdownConverter):
@@ -568,13 +590,75 @@ def get_article_urls_in_collection(collection_id):
 def get_single_answer_content(answer_url):
     logging.debug(f"开始获取回答内容: {answer_url}")
     flush_logs()
-    
+
+    # 从URL中提取answer_id（用于API备用请求）
+    # URL格式: https://www.zhihu.com/question/xxx/answer/yyy 或 https://www.zhihu.com/question/xxx/answer/yyy?param
+    import re
+    answer_id_match = re.search(r'/answer/(\d+)', answer_url)
+    answer_id = answer_id_match.group(1) if answer_id_match else None
+
     try:
         # 发送请求
         html_content = requests.get(answer_url, headers=headers, cookies=cookies)
+        logging.debug(f"HTTP请求状态码: {html_content.status_code}")
+
+        # 如果返回403，尝试使用API备用方案
+        if html_content.status_code == 403:
+            logging.warning(f"HTML请求返回403，尝试API备用方案: {answer_url}")
+            flush_logs()
+
+            if answer_id:
+                api_url = f"https://www.zhihu.com/api/v4/answers/{answer_id}?include=content"
+                logging.debug(f"调用API: {api_url}")
+
+                try:
+                    api_response = requests.get(api_url, headers=api_headers, cookies=cookies)
+                    api_response.raise_for_status()
+                    api_data = api_response.json()
+
+                    if api_data and 'content' in api_data:
+                        # API返回的content是HTML格式的回答内容
+                        content_html = api_data['content']
+                        logging.info(f"API备用方案成功获取内容，长度: {len(content_html)}")
+                        flush_logs()
+
+                        # 直接使用API返回的HTML内容，不需要BeautifulSoup解析
+                        # 但需要处理图片和链接卡片
+                        soup = BeautifulSoup(content_html, "lxml")
+
+                        # 去除不必要的style标签
+                        for el in soup.find_all('style'):
+                            el.extract()
+
+                        for el in soup.select('img[src*="data:image/svg+xml"]'):
+                            el.extract()
+
+                        for el in soup.find_all('a'):
+                            aclass = el.get('class')
+                            if isinstance(aclass, list) and 'LinkCard' in aclass:
+                                linkcard_name = el.get('data-text')
+                                el.string = linkcard_name if linkcard_name is not None else el.get('href')
+                            try:
+                                if el.get('href') and el.get('href').startswith('mailto'):
+                                    el.name = 'p'
+                            except:
+                                pass
+
+                        # 添加html外层标签
+                        answer_content = html_template(soup)
+                        return answer_content
+
+                except Exception as api_e:
+                    logging.error(f"API备用方案失败: {str(api_e)}")
+                    flush_logs()
+            else:
+                logging.error(f"无法从URL提取answer_id: {answer_url}")
+                flush_logs()
+                return -1
+
         html_content.raise_for_status()
         logging.debug(f"HTTP请求成功，状态码: {html_content.status_code}")
-        
+
         soup = BeautifulSoup(html_content.text, "lxml")
         
         # 尝试多种可能的选择器
@@ -669,102 +753,128 @@ def get_single_answer_content(answer_url):
 def get_single_post_content(paper_url):
     logging.debug(f"开始获取专栏文章内容: {paper_url}")
     flush_logs()
-    
-    try:
-        # 发送请求
-        html_content = requests.get(paper_url, headers=headers, cookies=cookies)
-        html_content.raise_for_status()
-        logging.debug(f"HTTP请求成功，状态码: {html_content.status_code}")
-        
-        soup = BeautifulSoup(html_content.text, "lxml")
-        
-        # 尝试多种可能的选择器
-        post_content = None
-        selectors = [
-            ('div', {'class': "Post-RichText"}),
-            ('div', {'class': "RichContent"}),
-            ('div', {'class': "RichContent-inner"}),
-            ('div', {'class': "Post-content"}),
-            ('div', {'class': "Post-RichTextContainer"}),
-            ('div', {'class': "ztext"}),
-            ('div', {'class': "Post-Main"}),
-            ('div', {'class': "Article-RichText"}),
-        ]
-        
-        for tag, attrs in selectors:
-            post_content = soup.find(tag, attrs)
-            if post_content:
-                logging.debug(f"找到专栏内容: {tag} {attrs}")
-                break
-        
-        # 如果还没找到，尝试CSS选择器
-        if not post_content:
-            fallback_selectors = [
-                "div.RichText",
-                "div.Post-content", 
-                "div.ContentItem-content",
-                ".Post .RichContent",
-                ".Post-RichTextContainer",
-                ".ztext",
-                ".Post-Main .RichContent",
-                "[data-zop-editor]",
-                ".Article-RichText",
-            ]
-            
-            for selector in fallback_selectors:
-                post_content = soup.select_one(selector)
-                if post_content:
-                    logging.debug(f"使用备用选择器找到内容: {selector}")
-                    break
-        
-        # 如果仍然没找到，尝试智能内容检测
-        if not post_content:
-            post_content = smart_content_detection(soup, paper_url)
-            if post_content:
-                logging.debug("使用智能内容检测找到内容")
-        
-        if not post_content:
-            # 检查是否是真正的404或其他错误
-            error_message = analyze_page_error(soup, html_content, paper_url)
-            
-            logging.error(f"未找到专栏内容容器: {paper_url} - {error_message}")
-            # 保存页面HTML以供调试
-            debug_dir = get_debug_path()
-            os.makedirs(debug_dir, exist_ok=True)
-            debug_file = os.path.join(debug_dir, f"debug_post_{paper_url.split('/')[-1]}.html")
-            with open(debug_file, 'w', encoding='utf-8') as f:
-                f.write(html_content.text)
-            logging.debug(f"页面HTML已保存到: {debug_file}")
-            flush_logs()
-            post_content = error_message
-        
-        if post_content and hasattr(post_content, 'find_all'):
-            # 去除不必要的style标签
-            for el in post_content.find_all('style'):
-                el.extract()
 
-            for el in post_content.select('img[src*="data:image/svg+xml"]'):
-                el.extract()
-            
-            for el in post_content.find_all('a'): # 处理专栏文章中的卡片链接
-                aclass = el.get('class')
-                if isinstance(aclass, list):
-                    if aclass[0] == 'LinkCard':
-                        linkcard_name = el.get('data-text')
-                        el.string = linkcard_name if linkcard_name is not None else el.get('href')
-                else:
-                    pass
-                try:
-                    if el.get('href').startswith('mailto'): # 特殊bug, 正文的aaa@bbb.ccc会被识别为邮箱, 嵌入<a href='mailto:xxx'>中, markdown转换时会报错
-                        el.name = 'p'
-                except:
-                    logging.warning(f"处理链接时出现问题: {paper_url}, {el}")
-        
-    except Exception as e:
-        logging.error(f"获取专栏文章内容时发生错误: {str(e)}")
-        logging.error(f"URL: {paper_url}")
-        flush_logs()
-        post_content = "该文章链接获取失败"
+    # 专栏文章可能较大，添加重试机制
+    max_retries = 3
+    last_error = None
+
+    for retry in range(max_retries):
+        post_content = None
+        try:
+            # 发送请求，添加超时设置，使用流式下载处理大文章
+            html_content = requests.get(paper_url, headers=headers, cookies=cookies, timeout=120, stream=True)
+            html_content.raise_for_status()
+            logging.debug(f"HTTP请求成功，状态码: {html_content.status_code}")
+
+            # 流式读取内容，避免大文章的网络中断问题
+            content_bytes = b''
+            for chunk in html_content.iter_content(chunk_size=8192):
+                if chunk:
+                    content_bytes += chunk
+            html_text = content_bytes.decode('utf-8', errors='ignore')
+            logging.debug(f"内容长度: {len(html_text)} 字符")
+
+            soup = BeautifulSoup(html_text, "lxml")
+
+            # 尝试多种可能的选择器
+            selectors = [
+                ('div', {'class': "Post-RichText"}),
+                ('div', {'class': "RichContent"}),
+                ('div', {'class': "RichContent-inner"}),
+                ('div', {'class': "Post-content"}),
+                ('div', {'class': "Post-RichTextContainer"}),
+                ('div', {'class': "ztext"}),
+                ('div', {'class': "Post-Main"}),
+                ('div', {'class': "Article-RichText"}),
+            ]
+
+            for tag, attrs in selectors:
+                post_content = soup.find(tag, attrs)
+                if post_content:
+                    logging.debug(f"找到专栏内容: {tag} {attrs}")
+                    break
+
+            # 如果还没找到，尝试CSS选择器
+            if not post_content:
+                fallback_selectors = [
+                    "div.RichText",
+                    "div.Post-content",
+                    "div.ContentItem-content",
+                    ".Post .RichContent",
+                    ".Post-RichTextContainer",
+                    ".ztext",
+                    ".Post-Main .RichContent",
+                    "[data-zop-editor]",
+                    ".Article-RichText",
+                ]
+
+                for selector in fallback_selectors:
+                    post_content = soup.select_one(selector)
+                    if post_content:
+                        logging.debug(f"使用备用选择器找到内容: {selector}")
+                        break
+
+            # 如果仍然没找到，尝试智能内容检测
+            if not post_content:
+                post_content = smart_content_detection(soup, paper_url)
+                if post_content:
+                    logging.debug("使用智能内容检测找到内容")
+
+            if not post_content:
+                # 检查是否是真正的404或其他错误
+                error_message = analyze_page_error(soup, html_content, paper_url)
+
+                logging.error(f"未找到专栏内容容器: {paper_url} - {error_message}")
+                # 保存页面HTML以供调试
+                debug_dir = get_debug_path()
+                os.makedirs(debug_dir, exist_ok=True)
+                debug_file = os.path.join(debug_dir, f"debug_post_{paper_url.split('/')[-1]}.html")
+                with open(debug_file, 'w', encoding='utf-8') as f:
+                    f.write(html_content.text)
+                logging.debug(f"页面HTML已保存到: {debug_file}")
+                flush_logs()
+                post_content = error_message
+
+            if post_content and hasattr(post_content, 'find_all'):
+                # 去除不必要的style标签
+                for el in post_content.find_all('style'):
+                    el.extract()
+
+                for el in post_content.select('img[src*="data:image/svg+xml"]'):
+                    el.extract()
+
+                for el in post_content.find_all('a'): # 处理专栏文章中的卡片链接
+                    aclass = el.get('class')
+                    if isinstance(aclass, list):
+                        if aclass[0] == 'LinkCard':
+                            linkcard_name = el.get('data-text')
+                            el.string = linkcard_name if linkcard_name is not None else el.get('href')
+                    else:
+                        pass
+                    try:
+                        if el.get('href').startswith('mailto'): # 特殊bug, 正文的aaa@bbb.ccc会被识别为邮箱, 嵌入<a href='mailto:xxx'>中, markdown转换时会报错
+                            el.name = 'p'
+                    except:
+                        logging.warning(f"处理链接时出现问题: {paper_url}, {el}")
+
+            # 成功获取内容，跳出重试循环
+            if post_content:
+                break
+
+        except Exception as e:
+            last_error = str(e)
+            logging.warning(f"获取专栏文章内容时发生错误 (尝试 {retry + 1}/{max_retries}): {str(e)}")
+            logging.warning(f"URL: {paper_url}")
+            flush_logs()
+
+            if retry < max_retries - 1:
+                import time
+                time.sleep(2)  # 等待2秒后重试
+                continue
+            else:
+                logging.error(f"达到最大重试次数，放弃: {paper_url}")
+                flush_logs()
+                post_content = f"该文章链接获取失败: {last_error}"
 
     # 添加html外层标签
     post_content = html_template(post_content)

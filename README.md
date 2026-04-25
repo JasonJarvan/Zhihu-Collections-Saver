@@ -246,6 +246,12 @@ export_collection(
 
 ## 更新日志
 
+### v2.3 反爬机制绕过
+- 🔄 **API 备用机制**: 当 HTML 请求返回 403 时，自动调用知乎 API (`/api/v4/answers/{id}?include=content`) 获取回答内容
+- 📦 **流式下载**: 专栏文章使用流式下载，解决大文章（如图片多的长文）的网络中断问题
+- 🔁 **重试机制**: 专栏文章添加 3 次重试，提高下载成功率
+- 🔐 **Headers 增强**: 更新请求 Headers 以模拟现代浏览器，减少被反爬拦截的概率
+
 ### v2.2 MCP 支持
 - 🤖 **MCP Server**: 新增 `mcp_server.py`，支持被 AI Agent 直接调用
 - 📋 **4个工具**: 提供 list_collections / export_collection / get_collection_info / search_collections 工具
